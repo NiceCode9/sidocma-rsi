@@ -1,0 +1,526 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Http\Controllers\Controller;
+use App\Models\Folder;
+use App\Models\Unit;
+use App\Models\User;
+use App\Models\FolderPermission;
+use App\Services\FolderService;
+use App\Services\PermissionService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Models\Role;
+
+class FolderController extends Controller
+{
+    protected $folderService;
+    protected $permissionService;
+
+    public function __construct(FolderService $folderService, PermissionService $permissionService)
+    {
+        $this->folderService = $folderService;
+        $this->permissionService = $permissionService;
+        // $this->middleware('auth');
+        // $this->middleware('can:manage-folders'); // Custom policy
+    }
+
+    /**
+     * Display folder management page
+     */
+    public function index()
+    {
+        $folders = Folder::with(['creator', 'unit', 'parent', 'children'])
+            ->orderBy('path')
+            ->get();
+
+        $units = Unit::all();
+
+        return view('folders.index', compact('folders', 'units'));
+    }
+
+    /**
+     * Get folder tree data for AJAX
+     */
+    public function getFolderTree()
+    {
+        $folders = Folder::with(['creator', 'unit', 'children', 'documents'])
+            ->where('is_active', true)
+            ->orderBy('path')
+            ->get();
+
+        $tree = $this->buildFolderTree($folders);
+
+        return response()->json($tree);
+    }
+
+    /**
+     * Build hierarchical folder tree
+     */
+    private function buildFolderTree($folders, $parentId = null)
+    {
+        $tree = [];
+
+        foreach ($folders as $folder) {
+            if ($folder->parent_id == $parentId) {
+                $node = [
+                    'id' => $folder->id,
+                    'name' => $folder->name,
+                    'description' => $folder->description,
+                    'unit' => $folder->unit,
+                    'creator' => $folder->creator->name,
+                    'created_at' => $folder->created_at->format('d M Y'),
+                    'is_active' => $folder->is_active,
+                    'path' => $folder->path,
+                    'level' => $folder->level,
+                    'documents_count' => $folder->documents->where('is_active', true)->count(),
+                    'subfolders_count' => $folder->children->where('is_active', true)->count(),
+                    'total_size' => $folder->documents->where('is_active', true)->sum('file_size'),
+                    'children' => $this->buildFolderTree($folders, $folder->id),
+                    'permissions' => $this->getFolderPermissionSummary($folder)
+                ];
+                $tree[] = $node;
+            }
+        }
+
+        return $tree;
+    }
+
+    /**
+     * Get folder permission summary
+     */
+    private function getFolderPermissionSummary(Folder $folder)
+    {
+        $permissions = FolderPermission::where('folder_id', $folder->id)
+            ->with(['unit', 'user'])
+            ->get();
+
+        $summary = [];
+        foreach ($permissions as $permission) {
+            if ($permission->user_id) {
+                $summary[] = [
+                    'type' => 'user',
+                    'name' => $permission->user->name,
+                    'permissions' => [
+                        'read' => $permission->can_read,
+                        'write' => $permission->can_write,
+                        'delete' => $permission->can_delete,
+                        'share' => $permission->can_share,
+                    ]
+                ];
+            } elseif ($permission->unit_id) {
+                $summary[] = [
+                    'type' => 'unit',
+                    'name' => $permission->unit->name,
+                    // 'role' => $permission->role->name ?? 'All Roles',
+                    'permissions' => [
+                        'read' => $permission->can_read,
+                        'write' => $permission->can_write,
+                        'delete' => $permission->can_delete,
+                        'share' => $permission->can_share,
+                    ]
+                ];
+            }
+        }
+
+        return $summary;
+    }
+
+    /**
+     * Store new folder
+     */
+    public function store(Request $request)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'parent_id' => 'nullable|exists:folders,id',
+            'unit_id' => 'nullable|exists:units,id',
+            'is_active' => 'boolean'
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            $folder = $this->folderService->createFolder($request->all(), Auth::user());
+
+            // Set default permissions based on unit
+            if ($folder->unit_id) {
+                // Give full access to the unit
+                $this->permissionService->grantFolderPermission(
+                    $folder,
+                    [
+                        'can_read' => true,
+                        'can_write' => true,
+                        'can_delete' => true,
+                        'can_share' => true
+                    ],
+                    Auth::user(),
+                    $folder->unit_id
+                );
+
+                // Give read access to Direktur
+                $direkturRole = Role::where('name', 'direktur')->first();
+                if ($direkturRole) {
+                    $this->permissionService->grantFolderPermission(
+                        $folder,
+                        [
+                            'can_read' => true,
+                            'can_write' => true,
+                            'can_delete' => false,
+                            'can_share' => true
+                        ],
+                        Auth::user(),
+                        null,
+                        $direkturRole->id
+                    );
+                }
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Folder berhasil dibuat',
+                'folder' => $folder->load(['creator', 'unit'])
+            ]);
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal membuat folder: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Get folder details
+     */
+    public function show(Folder $folder)
+    {
+        $folder->load(['creator', 'unit', 'parent', 'children.documents', 'documents', 'permissions.unit', 'permissions.role', 'permissions.user']);
+
+        $breadcrumbs = $folder->getBreadcrumb();
+        $totalSize = $folder->documents->where('is_active', true)->sum('file_size');
+
+        return response()->json([
+            'folder' => $folder,
+            'breadcrumbs' => $breadcrumbs,
+            'statistics' => [
+                'documents_count' => $folder->documents->where('is_active', true)->count(),
+                'subfolders_count' => $folder->children->where('is_active', true)->count(),
+                'total_size' => $totalSize,
+                'formatted_size' => $this->formatFileSize($totalSize)
+            ]
+        ]);
+    }
+
+    /**
+     * Update folder
+     */
+    public function update(Request $request, Folder $folder)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'parent_id' => 'nullable|exists:folders,id',
+            'unit_id' => 'nullable|exists:units,id',
+            'is_active' => 'boolean'
+        ]);
+
+        // Prevent moving folder to its own child
+        if ($request->parent_id) {
+            $parentPath = Folder::find($request->parent_id)->path;
+            if (strpos($parentPath, $folder->path) === 0) {
+                throw ValidationException::withMessages([
+                    'parent_id' => 'Tidak dapat memindahkan folder ke dalam subfolder-nya sendiri'
+                ]);
+            }
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $folder->update($request->all());
+
+            // Update path if parent changed
+            if ($folder->wasChanged('parent_id')) {
+                $folder->updatePath();
+                $this->updateChildrenPaths($folder);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Folder berhasil diupdate',
+                'folder' => $folder->load(['creator', 'unit'])
+            ]);
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengupdate folder: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Delete folder (soft delete)
+     */
+    public function destroy(Folder $folder)
+    {
+        try {
+            DB::beginTransaction();
+
+            $this->folderService->deleteFolder($folder);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Folder berhasil dihapus'
+            ]);
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal menghapus folder: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Move folder to new parent
+     */
+    public function move(Request $request, Folder $folder)
+    {
+        $request->validate([
+            'parent_id' => 'nullable|exists:folders,id'
+        ]);
+
+        // Prevent moving folder to its own child
+        if ($request->parent_id) {
+            $newParent = Folder::find($request->parent_id);
+            if (strpos($newParent->path, $folder->path) === 0) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tidak dapat memindahkan folder ke dalam subfolder-nya sendiri'
+                ], 422);
+            }
+        }
+
+        try {
+            DB::beginTransaction();
+
+            $this->folderService->moveFolder($folder, $request->parent_id ? Folder::find($request->parent_id) : null);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Folder berhasil dipindahkan'
+            ]);
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal memindahkan folder: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Get folder permissions page
+     */
+    public function permissions(Folder $folder)
+    {
+        $folder->load(['permissions.unit', 'permissions.role', 'permissions.user']);
+        $units = Unit::all();
+        $roles = Role::all();
+        $users = User::with(['unit', 'role'])->where('is_active', true)->get();
+
+        return view('folders.partials.permissions', compact('folder', 'units', 'roles', 'users'));
+    }
+
+    /**
+     * Update folder permissions
+     */
+    public function updatePermissions(Request $request, Folder $folder)
+    {
+        $request->validate([
+            'permissions' => 'required|array',
+            'permissions.*.type' => 'required|in:unit,role,user',
+            'permissions.*.target_id' => 'required|integer',
+            'permissions.*.can_read' => 'boolean',
+            'permissions.*.can_write' => 'boolean',
+            'permissions.*.can_delete' => 'boolean',
+            'permissions.*.can_share' => 'boolean',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Delete existing permissions
+            FolderPermission::where('folder_id', $folder->id)->delete();
+
+            // Create new permissions
+            foreach ($request->permissions as $permissionData) {
+                $unitId = null;
+                $roleId = null;
+                $userId = null;
+
+                switch ($permissionData['type']) {
+                    case 'unit':
+                        $unitId = $permissionData['target_id'];
+                        $roleId = $permissionData['role_id'] ?? null;
+                        break;
+                    case 'role':
+                        $roleId = $permissionData['target_id'];
+                        break;
+                    case 'user':
+                        $userId = $permissionData['target_id'];
+                        break;
+                }
+
+                $this->permissionService->grantFolderPermission(
+                    $folder,
+                    [
+                        'can_read' => $permissionData['can_read'] ?? false,
+                        'can_write' => $permissionData['can_write'] ?? false,
+                        'can_delete' => $permissionData['can_delete'] ?? false,
+                        'can_share' => $permissionData['can_share'] ?? false,
+                    ],
+                    Auth::user(),
+                    $unitId,
+                    $roleId,
+                    $userId
+                );
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Permission berhasil diupdate'
+            ]);
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Gagal mengupdate permission: ' . $e->getMessage()
+            ], 422);
+        }
+    }
+
+    /**
+     * Get folder access preview
+     */
+    public function accessPreview(Folder $folder)
+    {
+        $users = User::with(['role', 'unit'])->where('is_active', true)->get();
+        $accessList = [];
+
+        foreach ($users as $user) {
+            $canAccess = $this->permissionService->canAccessFolder($user, $folder);
+            if ($canAccess) {
+                $accessList[] = [
+                    'user' => $user,
+                    'permissions' => [
+                        'read' => $this->permissionService->hasPermission($user, $folder, 'can_read'),
+                        'write' => $this->permissionService->hasPermission($user, $folder, 'can_write'),
+                        'delete' => $this->permissionService->hasPermission($user, $folder, 'can_delete'),
+                        'share' => $this->permissionService->hasPermission($user, $folder, 'can_share'),
+                    ]
+                ];
+            }
+        }
+
+        return response()->json($accessList);
+    }
+
+    /**
+     * Search folders
+     */
+    public function search(Request $request)
+    {
+        $query = $request->get('q', '');
+
+        $folders = Folder::with(['creator', 'unit'])
+            ->where('is_active', true)
+            ->where('name', 'LIKE', '%' . $query . '%')
+            ->orderBy('path')
+            ->limit(20)
+            ->get();
+
+        return response()->json($folders);
+    }
+
+    /**
+     * Get folder statistics
+     */
+    public function statistics()
+    {
+        $stats = [
+            'total_folders' => Folder::where('is_active', true)->count(),
+            'total_documents' => DB::table('documents')
+                ->join('folders', 'documents.folder_id', '=', 'folders.id')
+                ->where('folders.is_active', true)
+                ->where('documents.is_active', true)
+                ->count(),
+            'total_size' => DB::table('documents')
+                ->join('folders', 'documents.folder_id', '=', 'folders.id')
+                ->where('folders.is_active', true)
+                ->where('documents.is_active', true)
+                ->sum('documents.file_size'),
+            'folders_by_unit' => Folder::select('units.name', DB::raw('count(*) as count'))
+                ->join('units', 'folders.unit_id', '=', 'units.id')
+                ->where('folders.is_active', true)
+                ->groupBy('units.id', 'units.name')
+                ->get(),
+            'recent_folders' => Folder::with(['creator', 'unit'])
+                ->where('is_active', true)
+                ->orderBy('created_at', 'desc')
+                ->limit(5)
+                ->get()
+        ];
+
+        $stats['formatted_total_size'] = $this->formatFileSize($stats['total_size']);
+
+        return response()->json($stats);
+    }
+
+    /**
+     * Update children paths recursively
+     */
+    private function updateChildrenPaths(Folder $folder)
+    {
+        $children = $folder->children;
+        foreach ($children as $child) {
+            $child->updatePath();
+            $this->updateChildrenPaths($child);
+        }
+    }
+
+    /**
+     * Format file size
+     */
+    private function formatFileSize($bytes)
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+        for ($i = 0; $bytes > 1024 && $i < 4; $i++) {
+            $bytes /= 1024;
+        }
+
+        return round($bytes, 2) . ' ' . $units[$i];
+    }
+}
