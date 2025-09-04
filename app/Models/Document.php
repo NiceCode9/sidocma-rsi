@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Document extends Model
 {
@@ -23,10 +24,12 @@ class Document extends Model
         'description',
         'version',
         'is_active',
+        'is_latter',
     ];
 
     protected $casts = [
-        'is_active' => 'boolean'
+        'is_active' => 'boolean',
+        'is_latter' => 'boolean',
     ];
 
     public function folder(): BelongsTo
@@ -44,9 +47,9 @@ class Document extends Model
         return $this->hasMany(DocumentVersion::class);
     }
 
-    public function sharedLinks(): HasMany
+    public function sharedLink(): HasOne
     {
-        return $this->hasMany(SharedLink::class);
+        return $this->hasOne(SharedLink::class);
     }
 
     // Scope untuk dokumen aktif

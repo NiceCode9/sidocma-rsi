@@ -7,6 +7,7 @@ use App\Models\DocumentVersion;
 use App\Models\Folder;
 use App\Models\User;
 use App\Models\ActivityLog;
+use App\Models\SharedLink;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -20,7 +21,8 @@ class DocumentService
         UploadedFile $file,
         Folder $folder,
         User $uploader,
-        ?string $description = null
+        ?string $description = null,
+        bool $isLatter = false
     ): Document {
         $fileName = $this->generateUniqueFileName($file);
         $filePath = $file->storeAs('documents', $fileName, 'public');
@@ -35,7 +37,16 @@ class DocumentService
             'folder_id' => $folder->id,
             'uploaded_by' => $uploader->id,
             'description' => $description,
-            'version' => 1
+            'version' => 1,
+            'is_active' => true,
+            'is_latter' => $isLatter // Pastikan parameter ini diterima dengan benar
+        ]);
+
+        // Create shared link
+        SharedLink::create([
+            'uuid' => Str::uuid(),
+            'document_id' => $document->id,
+            'created_by' => $uploader->id,
         ]);
 
         // Log activity

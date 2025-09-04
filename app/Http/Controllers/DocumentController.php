@@ -9,7 +9,9 @@ use App\Services\DocumentService;
 use App\Services\PermissionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class DocumentController extends Controller
 {
@@ -25,38 +27,120 @@ class DocumentController extends Controller
     /**
      * Upload multiple documents
      */
+    // public function store(Request $request)
+    // {
+    //     $request->validate([
+    //         'folder_id' => 'required|exists:folders,id',
+    //         'files.*' => 'required|file|max:10240', // 10MB max per file
+    //         'description' => 'nullable|string'
+    //     ]);
+
+    //     $folder = Folder::findOrFail($request->folder_id);
+    //     $user = Auth::user();
+
+    //     // Check permission
+    //     if (!$this->permissionService->canUploadToFolder($user, $folder)) {
+    //         return response()->json([
+    //             'success' => false,
+    //             'message' => 'Tidak memiliki izin untuk mengupload ke folder ini'
+    //         ], 403);
+    //     }
+
+    //     $uploadedFiles = [];
+    //     $failedFiles = [];
+
+    //     $isLetter = $request->is_latter ? true : false;
+
+    //     foreach ($request->file('files') as $file) {
+    //         try {
+    //             $document = $this->documentService->uploadDocument(
+    //                 $file,
+    //                 $folder,
+    //                 $user,
+    //                 $request->description,
+    //                 $isLetter,
+    //             );
+
+    //             $uploadedFiles[] = $document->name;
+    //         } catch (\Exception $e) {
+    //             $failedFiles[] = [
+    //                 'name' => $file->getClientOriginalName(),
+    //                 'error' => $e->getMessage()
+    //             ];
+    //         }
+    //     }
+
+    //     $successCount = count($uploadedFiles);
+    //     $failedCount = count($failedFiles);
+
+    //     if ($successCount > 0 && $failedCount === 0) {
+    //         return response()->json([
+    //             'success' => true,
+    //             'message' => "{$successCount} file berhasil diupload",
+    //             'request' => $request->all()
+    //         ]);
+    //     } elseif ($successCount > 0 && $failedCount > 0) {
+    //         return response()->json([
+    //             'success' => true,
+    //             'message' => "{$successCount} file berhasil diupload, {$failedCount} file gagal",
+    //             'failed_files' => $failedFiles
+    //         ]);
+    //     } else {
+    //         return response()->json([
+    //             'success' => false,
+    //             'message' => 'Semua file gagal diupload',
+    //             'failed_files' => $failedFiles
+    //         ], 422);
+    //     }
+    // }
+
     public function store(Request $request)
     {
+        // Debug request data
+        Log::info('Upload request data:', [
+            'folder_id' => $request->input('folder_id'),
+            'description' => $request->input('description'),
+            'is_latter' => $request->input('is_latter'),
+            'files_count' => count($request->file('files', []))
+        ]);
+
         $request->validate([
             'folder_id' => 'required|exists:folders,id',
+            'description' => 'nullable|string',
+            'files' => 'required|array|min:1',
             'files.*' => 'required|file|max:10240', // 10MB max per file
-            'description' => 'nullable|string'
+            'is_latter' => 'nullable|boolean'
         ]);
 
         $folder = Folder::findOrFail($request->folder_id);
+
         $user = Auth::user();
 
-        // Check permission
-        if (!$this->permissionService->canUploadToFolder($user, $folder)) {
+        // Check if user can write to this folder
+        if (!$this->permissionService->hasPermission($user, $folder, 'can_write')) {
             return response()->json([
                 'success' => false,
-                'message' => 'Tidak memiliki izin untuk mengupload ke folder ini'
+                'message' => 'Anda tidak memiliki izin untuk mengunggah dokumen ke folder ini'
             ], 403);
         }
 
-        $uploadedFiles = [];
-        $failedFiles = [];
+        $files = $request->file('files');
+        $description = $request->input('description');
+        $isLatter = $request->boolean('is_latter'); // Gunakan boolean() helper Laravel
+        $uploadedDocuments = [];
+        $errors = [];
 
-        foreach ($request->file('files') as $file) {
+        foreach ($files as $file) {
             try {
                 $document = $this->documentService->uploadDocument(
                     $file,
                     $folder,
                     $user,
-                    $request->description
+                    $description,
+                    $isLatter,
                 );
 
-                $uploadedFiles[] = $document->name;
+                $uploadedDocuments[] = $document;
             } catch (\Exception $e) {
                 $failedFiles[] = [
                     'name' => $file->getClientOriginalName(),
@@ -65,27 +149,26 @@ class DocumentController extends Controller
             }
         }
 
-        $successCount = count($uploadedFiles);
-        $failedCount = count($failedFiles);
-
-        if ($successCount > 0 && $failedCount === 0) {
-            return response()->json([
-                'success' => true,
-                'message' => "{$successCount} file berhasil diupload"
-            ]);
-        } elseif ($successCount > 0 && $failedCount > 0) {
-            return response()->json([
-                'success' => true,
-                'message' => "{$successCount} file berhasil diupload, {$failedCount} file gagal",
-                'failed_files' => $failedFiles
-            ]);
-        } else {
+        if (empty($uploadedDocuments)) {
             return response()->json([
                 'success' => false,
-                'message' => 'Semua file gagal diupload',
-                'failed_files' => $failedFiles
-            ], 422);
+                'message' => 'Gagal mengupload semua file',
+                'errors' => $errors
+            ], 500);
         }
+
+        $successCount = count($uploadedDocuments);
+        $totalCount = count($files);
+        $message = $successCount === $totalCount
+            ? "Berhasil mengupload {$successCount} file"
+            : "Berhasil mengupload {$successCount} dari {$totalCount} file";
+
+        return response()->json([
+            'success' => true,
+            'message' => $message,
+            'data' => $uploadedDocuments,
+            'errors' => $errors
+        ], 201);
     }
 
     /**
@@ -108,6 +191,12 @@ class DocumentController extends Controller
                 'error' => 'File tidak ditemukan'
             ], 404);
         }
+        $document->sharedLink->incrementDownload();
+        if ($document->sharedLink->read_at == null && !$user->canAccessAllFolders() && !$document->sharedLink->is_read) {
+            $document->sharedLink->is_read = true;
+            $document->sharedLink->read_at = now();
+        }
+        $document->sharedLink->save();
 
         try {
             $filePath = $this->documentService->downloadDocument($document, $user);

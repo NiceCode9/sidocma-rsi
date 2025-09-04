@@ -218,14 +218,27 @@
                             </div>
                             <small class="form-text text-muted">Maksimal ukuran file 10MB per file</small>
                         </div>
+
+                        <div class="form-group">
+                            <label>Is Latter</label>
+                            <div class="custom-control custom-switch">
+                                <input type="checkbox" class="custom-control-input" id="is_latter" value="1">
+                                <label class="custom-control-label" for="is_latter">Mark as Latter Document</label>
+                            </div>
+                            <small class="form-text text-muted">Centang jika dokumen ini adalah surat/dokumen resmi</small>
+                        </div>
+
                         <div class="form-group">
                             <label>Deskripsi</label>
-                            <textarea class="form-control" id="fileDescription" rows="3"></textarea>
+                            <textarea class="form-control" id="fileDescription" rows="3"
+                                placeholder="Deskripsi opsional untuk file yang akan diupload"></textarea>
                         </div>
                     </form>
+
                     <div id="uploadProgress" style="display: none;">
                         <div class="progress mb-2">
-                            <div class="progress-bar" role="progressbar" style="width: 0%"></div>
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"
+                                style="width: 0%"></div>
                         </div>
                         <div class="text-center">
                             <small id="uploadStatus">Uploading...</small>
@@ -234,7 +247,7 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">Batal</button>
-                    <button type="button" class="btn btn-success" onclick="uploadFiles()">
+                    <button type="button" class="btn btn-success" id="uploadBtn" onclick="uploadFiles()">
                         <i class="fas fa-upload mr-1"></i>
                         Upload
                     </button>
@@ -422,7 +435,6 @@
         }
     </script>
 
-
     <script>
         let currentFolderId = null;
         let viewMode = 'grid';
@@ -495,6 +507,17 @@
                 $(this).parent().parent().addClass('shadow-sm');
             }).on('blur', function() {
                 $(this).parent().parent().removeClass('shadow-sm');
+            });
+
+            $('#uploadModal').on('hidden.bs.modal', function() {
+                // Reset form dan checkbox saat modal ditutup
+                $('#uploadForm')[0].reset();
+                $('#is_latter').prop('checked', false);
+                $('.custom-file-label').text('Pilih file...');
+                $('#uploadProgress').hide();
+                $('.modal-footer button').prop('disabled', false);
+                $('.progress-bar').css('width', '0%');
+                $('#uploadStatus').text('Uploading...');
             });
         });
 
@@ -975,23 +998,52 @@
         function uploadFiles() {
             const files = $('#fileInput')[0].files;
             const description = $('#fileDescription').val().trim();
+            const isLatterChecked = $('#is_latter').is(':checked');
+
+            console.log('Upload started with:');
+            console.log('- Files count:', files.length);
+            console.log('- Description:', description);
+            console.log('- Is Latter:', isLatterChecked);
+            console.log('- Current Folder ID:', currentFolderId);
 
             if (files.length === 0) {
                 showAlert('warning', 'Pilih minimal satu file!');
                 return;
             }
 
+            if (!currentFolderId) {
+                showAlert('warning', 'Pilih folder tujuan terlebih dahulu!');
+                return;
+            }
+
             const formData = new FormData();
             formData.append('folder_id', currentFolderId);
             formData.append('description', description);
-            formData.append('_token', '{{ csrf_token() }}');
+            formData.append('_token', document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+                '{{ csrf_token() }}');
 
+            // Penting: Kirim sebagai string, bukan boolean
+            formData.append('is_latter', isLatterChecked ? '1' : '0');
+
+            // Tambahkan files
             for (let i = 0; i < files.length; i++) {
                 formData.append('files[]', files[i]);
             }
 
+            // Debug FormData
+            console.log('FormData entries:');
+            for (let [key, value] of formData.entries()) {
+                if (value instanceof File) {
+                    console.log(`${key}: File - ${value.name}`);
+                } else {
+                    console.log(`${key}: ${value}`);
+                }
+            }
+
+            // Show progress
             $('#uploadProgress').show();
-            $('.modal-footer button').prop('disabled', true);
+            $('#uploadBtn').prop('disabled', true);
+            $('.modal-footer .btn-secondary').prop('disabled', true);
 
             $.ajax({
                     url: '{{ route('documents.store') }}',
@@ -1003,9 +1055,9 @@
                         var xhr = new window.XMLHttpRequest();
                         xhr.upload.addEventListener("progress", function(evt) {
                             if (evt.lengthComputable) {
-                                var percentComplete = evt.loaded / evt.total;
-                                percentComplete = parseInt(percentComplete * 100);
+                                var percentComplete = Math.round((evt.loaded / evt.total) * 100);
                                 $('.progress-bar').css('width', percentComplete + '%');
+                                $('.progress-bar').text(percentComplete + '%');
                                 $('#uploadStatus').text(`Uploading... ${percentComplete}%`);
                             }
                         }, false);
@@ -1013,24 +1065,49 @@
                     }
                 })
                 .done(function(response) {
+                    console.log('Upload response:', response);
+
                     if (response.success) {
                         $('#uploadModal').modal('hide');
-                        $('#uploadForm')[0].reset();
-                        $('.custom-file-label').text('Pilih file...');
                         showAlert('success', response.message || 'File berhasil diupload');
                         loadFolderContent(currentFolderId);
+
+                        // Log untuk debugging
+                        if (response.data && response.data.length > 0) {
+                            console.log('Uploaded documents is_latter values:');
+                            response.data.forEach(doc => {
+                                console.log(`${doc.name}: is_latter = ${doc.is_latter}`);
+                            });
+                        }
                     } else {
                         showAlert('error', response.message || 'Gagal mengupload file');
+                        if (response.errors && response.errors.length > 0) {
+                            response.errors.forEach(error => {
+                                showAlert('warning', error);
+                            });
+                        }
                     }
                 })
                 .fail(function(xhr) {
-                    const message = xhr.responseJSON?.message || 'Gagal mengupload file';
+                    console.error('Upload failed:', xhr);
+                    let message = 'Gagal mengupload file';
+
+                    if (xhr.responseJSON) {
+                        message = xhr.responseJSON.message || message;
+                        if (xhr.responseJSON.errors) {
+                            console.error('Validation errors:', xhr.responseJSON.errors);
+                        }
+                    }
+
                     showAlert('error', message);
                 })
                 .always(function() {
+                    // Reset progress
                     $('#uploadProgress').hide();
-                    $('.modal-footer button').prop('disabled', false);
+                    $('#uploadBtn').prop('disabled', false);
+                    $('.modal-footer .btn-secondary').prop('disabled', false);
                     $('.progress-bar').css('width', '0%');
+                    $('.progress-bar').text('');
                     $('#uploadStatus').text('Uploading...');
                 });
         }

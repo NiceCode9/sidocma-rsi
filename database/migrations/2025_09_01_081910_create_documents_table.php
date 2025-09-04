@@ -24,6 +24,7 @@ return new class extends Migration
             $table->text('description')->nullable();
             $table->integer('version')->default(1);
             $table->boolean('is_active')->default(true);
+            $table->boolean('is_latter')->default(false);
             $table->timestamps();
 
             $table->index(['folder_id']);

@@ -16,7 +16,8 @@ return new class extends Migration
             $table->string('name');
             $table->text('description')->nullable();
             $table->foreignId('parent_id')->nullable()->constrained('folders')->cascadeOnDelete();
-            $table->string('path', 1000);
+            // $table->string('path', 1000); For sqlite
+            $table->string('path', 191); // For mysql
             $table->integer('level')->default(0);
             $table->foreignId('created_by')->constrained('users')->restrictOnDelete();
             $table->foreignId('unit_id')->nullable()->constrained('units')->nullOnDelete();

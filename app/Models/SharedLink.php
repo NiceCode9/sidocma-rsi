@@ -19,7 +19,10 @@ class SharedLink extends Model
         'expires_at',
         'download_count',
         'max_downloads',
-        'is_active'
+        'is_active',
+        'is_read',
+        'read_at',
+        'opened_by',
     ];
 
     protected $casts = [
