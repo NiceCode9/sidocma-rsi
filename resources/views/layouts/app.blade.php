@@ -78,19 +78,32 @@
                     </div>
                     <ul class="sidebar-menu">
                         <li class="menu-header">Menu</li>
-                        <li class="{{ request()->routeIs('dashboard*') ? 'active' : '' }}"><a class="nav-link"
-                                href="{{ route('dashboard') }}"><i class="fas fa-fire"></i>
-                                <span>Dashboard</span></a></li>
-                        <li class="menu-header">Data Master</li>
-                        <li class="{{ request()->routeIs('role*') ? 'active' : '' }}"><a class="nav-link"
-                                href="{{ route('role.index') }}"><i class="fas fa-user-tie"></i>
-                                <span>Role</span></a></li>
-                        <li class="{{ request()->routeIs('permission*') ? 'active' : '' }}"><a class="nav-link"
-                                href="{{ route('permission.index') }}"><i class="fas fa-key"></i>
-                                <span>Permission</span></a></li>
-                        <li class="{{ request()->routeIs('unit*') ? 'active' : '' }}"><a class="nav-link"
-                                href="{{ route('unit.index') }}"><i class="fas fa-building"></i>
-                                <span>Unit</span></a></li>
+                        @if (auth()->user()->hasRole('admin'))
+                            <li class="{{ request()->routeIs('dashboard*') ? 'active' : '' }}"><a class="nav-link"
+                                    href="{{ route('dashboard') }}"><i class="fas fa-fire"></i>
+                                    <span>Dashboard</span></a></li>
+                            <li class="menu-header">Data Master</li>
+                            <li class="{{ request()->routeIs('role*') ? 'active' : '' }}"><a class="nav-link"
+                                    href="{{ route('role.index') }}"><i class="fas fa-user-tie"></i>
+                                    <span>Role</span></a></li>
+                            <li class="{{ request()->routeIs('permission*') ? 'active' : '' }}"><a class="nav-link"
+                                    href="{{ route('permission.index') }}"><i class="fas fa-key"></i>
+                                    <span>Permission</span></a></li>
+                            <li class="{{ request()->routeIs('unit*') ? 'active' : '' }}"><a class="nav-link"
+                                    href="{{ route('unit.index') }}"><i class="fas fa-building"></i>
+                                    <span>Unit</span></a></li>
+                            <li class="{{ request()->routeIs('users*') ? 'active' : '' }}"><a class="nav-link"
+                                    href="{{ route('users.index') }}"><i class="fas fa-users"></i>
+                                    <span>Users</span></a></li>
+                        @endif
+
+                        <li class="menu-header">Manajemen Document</li>
+                        <li class="{{ request()->routeIs('folders*') ? 'active' : '' }}"><a class="nav-link"
+                                href="{{ route('folders.index') }}"><i class="fas fa-folder-open"></i>
+                                <span>Manajemen Documents</span></a></li>
+                        <li class="{{ request()->routeIs('arsip-surat*') ? 'active' : '' }}"><a class="nav-link"
+                                href="{{ route('arsip-surat.index') }}"><i class="fas fa-envelope"></i>
+                                <span>Arsip Surat</span></a></li>
 
                         {{-- <li class="menu-header">Transaksi</li> --}}
 
@@ -159,6 +172,53 @@
             Swal.fire("Gagal!", "{{ session('error') }}", "error");
         @endif
     </script>
+    </script>
+
+    <script>
+        function destroy(url, table = null) {
+            Swal.fire({
+                title: 'Apakah Anda yakin?',
+                text: "Anda tidak akan dapat mengembalikan ini!",
+                icon: 'warning',
+                showCancelButton: true,
+                confirmButtonColor: '#3085d6',
+                cancelButtonColor: '#d33',
+                confirmButtonText: 'Ya, hapus saja!'
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    $.ajax({
+                        type: "DELETE",
+                        url: url,
+                        dataType: "json",
+                        headers: {
+                            'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')
+                        },
+                        success: function(response) {
+                            if (response.success) {
+                                Swal.fire(
+                                    'Deleted!',
+                                    response.message,
+                                    'success'
+                                ).then(() => {
+                                    if (table) {
+                                        table.ajax.reload();
+                                    } else {
+                                        location.reload();
+                                    }
+                                });
+                            }
+                        },
+                        error: function(response) {
+                            Swal.fire({
+                                icon: 'error',
+                                title: 'Gagal',
+                                text: response.responseJSON.message,
+                            });
+                        }
+                    });
+                }
+            });
+        }
     </script>
 
     @stack('scripts')

@@ -19,7 +19,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 
     Route::resource('role', \App\Http\Controllers\RoleController::class);
-    // Route::resource('user', \App\Http\Controllers\UserController::class)->middleware('can:manage users');
+    Route::resource('users', \App\Http\Controllers\UserController::class);
     Route::resource('unit', \App\Http\Controllers\UnitController::class);
     Route::resource('permission', \App\Http\Controllers\PermissionController::class);
 
@@ -57,6 +57,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/documents/{document}/download', [DocumentController::class, 'download'])->name('documents.download');
     Route::delete('/documents/{document}', [DocumentController::class, 'destroy'])->name('documents.destroy');
     Route::get('/documents/share/{document}', [DocumentController::class, 'share'])->name('documents.share');
+
+    // Arsip Surat Route
+    Route::get('/arsip-surat', [\App\Http\Controllers\ArsipSuratController::class, 'index'])->name('arsip-surat.index');
+
 
     // Route::prefix('documents')->name('documents.')->group(function () {
     //     Route::get('/', [\App\Http\Controllers\DocumentController::class, 'index'])->name('index');
