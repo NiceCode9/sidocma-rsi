@@ -195,6 +195,7 @@ class DocumentController extends Controller
         if ($document->sharedLink->read_at == null && !$user->canAccessAllFolders() && !$document->sharedLink->is_read) {
             $document->sharedLink->is_read = true;
             $document->sharedLink->read_at = now();
+            $document->sharedLink->opened_by = $user->name;
         }
         $document->sharedLink->save();
 

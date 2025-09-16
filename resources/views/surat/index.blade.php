@@ -25,6 +25,7 @@
                                             <th>Status</th>
                                             <th>Tanggal Dibuka</th>
                                             <th>Dibuka Oleh</th>
+                                            <th>Tanggal Dikirim</th>
                                             <th>File</th>
                                         </tr>
                                     </thead>
@@ -67,6 +68,10 @@
                     {
                         data: 'opened_by',
                         name: 'opened_by'
+                    },
+                    {
+                        data: 'created_at',
+                        name: 'created_at'
                     },
                     {
                         data: 'file',
